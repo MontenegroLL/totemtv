@@ -1,35 +1,48 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { MediaItem, PlaybackState, AppConfig } from '@/types/appx';
 
-// Função para extrair ID da pasta do Google Drive de uma URL
-function extractDriveFolderId(url: string): string | null {
-  const patterns = [
-    /folders\/([a-zA-Z0-9_-]+)/,
-    /id=([a-zA-Z0-9_-]+)/,
-    /^([a-zA-Z0-9_-]+)$/
-  ];
-  
-  for (const pattern of patterns) {
-    const match = url.match(pattern);
-    if (match) return match[1];
+// Função para embaralhar array (Fisher-Yates shuffle)
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  return null;
+  return shuffled;
 }
 
-// Simula busca de arquivos (V1: entrada manual de URL)
-// Na V3, isso será substituído por chamada real à API do Google Drive
-function parseMediaUrl(url: string): MediaItem[] {
-  if (!url.trim()) return [];
+// Função para extrair arquivos de mídia de uma URL
+// Suporta múltiplas URLs separadas por vírgula ou quebra de linha
+function parseMediaUrls(input: string): MediaItem[] {
+  if (!input.trim()) return [];
   
-  // Por enquanto, trata a URL como uma única mídia
-  // Detecta se é imagem ou vídeo pela extensão
-  const isVideo = /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url);
+  // Separa por vírgula, quebra de linha ou ponto e vírgula
+  const urls = input
+    .split(/[,;\n]+/)
+    .map(url => url.trim())
+    .filter(url => url.length > 0);
   
-  return [{
-    id: Date.now().toString(),
-    type: isVideo ? 'video' : 'image',
-    url: url.trim(),
-  }];
+  return urls.map((url, index) => {
+    // Detecta se é imagem ou vídeo pela extensão
+    const isVideo = /\.(mp4|webm|mov|avi|mkv|m4v)(\?|$)/i.test(url);
+    const isImage = /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(url);
+    
+    return {
+      id: `media-${Date.now()}-${index}`,
+      type: isVideo ? 'video' : 'image',
+      url: url,
+    };
+  });
+}
+
+// Função para selecionar próxima mídia aleatória
+function getRandomIndex(currentIndex: number, length: number): number {
+  if (length <= 1) return 0;
+  let newIndex = currentIndex;
+  while (newIndex === currentIndex) {
+    newIndex = Math.floor(Math.random() * length);
+  }
+  return newIndex;
 }
 
 export function useMediaPlayer(config: AppConfig) {
@@ -40,43 +53,55 @@ export function useMediaPlayer(config: AppConfig) {
   });
   
   const [mediaList, setMediaList] = useState<MediaItem[]>([]);
+  const [shuffledList, setShuffledList] = useState<MediaItem[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const loadMedia = useCallback((url: string) => {
-    const items = parseMediaUrl(url);
+  const loadMedia = useCallback((input: string) => {
+    const items = parseMediaUrls(input);
     setMediaList(items);
     
-    if (items.length > 0) {
+    // Embaralha a lista para reprodução aleatória
+    const shuffled = shuffleArray(items);
+    setShuffledList(shuffled);
+    
+    if (shuffled.length > 0) {
       setPlaybackState({
         isPlaying: false,
         currentIndex: 0,
-        currentMedia: items[0],
+        currentMedia: shuffled[0],
       });
     }
   }, []);
 
   const nextMedia = useCallback(() => {
-    if (mediaList.length === 0) return;
+    if (shuffledList.length === 0) return;
     
     setPlaybackState(prev => {
-      const nextIndex = (prev.currentIndex + 1) % mediaList.length;
+      // Escolhe próximo índice aleatório diferente do atual
+      const nextIndex = getRandomIndex(prev.currentIndex, shuffledList.length);
       return {
         ...prev,
         currentIndex: nextIndex,
-        currentMedia: mediaList[nextIndex],
+        currentMedia: shuffledList[nextIndex],
       };
     });
-  }, [mediaList]);
+  }, [shuffledList]);
 
   const startPlayback = useCallback(() => {
-    if (mediaList.length === 0) return;
+    if (shuffledList.length === 0) return;
     
-    setPlaybackState(prev => ({
-      ...prev,
+    // Re-embaralha ao iniciar
+    const newShuffled = shuffleArray(mediaList);
+    setShuffledList(newShuffled);
+    
+    const randomIndex = Math.floor(Math.random() * newShuffled.length);
+    
+    setPlaybackState({
       isPlaying: true,
-      currentMedia: mediaList[prev.currentIndex],
-    }));
-  }, [mediaList]);
+      currentIndex: randomIndex,
+      currentMedia: newShuffled[randomIndex],
+    });
+  }, [mediaList, shuffledList.length]);
 
   const stopPlayback = useCallback(() => {
     if (timerRef.current) {
@@ -90,20 +115,25 @@ export function useMediaPlayer(config: AppConfig) {
     }));
   }, []);
 
-  // Timer para troca de imagens
+  // Timer para troca de imagens com intervalo aleatório adicional (±20%)
   useEffect(() => {
     if (playbackState.isPlaying && playbackState.currentMedia?.type === 'image') {
-      timerRef.current = setInterval(() => {
+      // Adiciona variação de ±20% no tempo para parecer mais natural
+      const baseTime = config.imageInterval * 1000;
+      const variation = baseTime * 0.2;
+      const randomTime = baseTime + (Math.random() * variation * 2 - variation);
+      
+      timerRef.current = setTimeout(() => {
         nextMedia();
-      }, config.imageInterval * 1000);
+      }, randomTime);
       
       return () => {
         if (timerRef.current) {
-          clearInterval(timerRef.current);
+          clearTimeout(timerRef.current);
         }
       };
     }
-  }, [playbackState.isPlaying, playbackState.currentMedia, config.imageInterval, nextMedia]);
+  }, [playbackState.isPlaying, playbackState.currentMedia, playbackState.currentIndex, config.imageInterval, nextMedia]);
 
   return {
     playbackState,

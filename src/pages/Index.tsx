@@ -14,6 +14,7 @@ const Index = () => {
   
   const {
     playbackState,
+    mediaList,
     loadMedia,
     startPlayback,
     stopPlayback,
@@ -105,6 +106,7 @@ const Index = () => {
         playbackState={playbackState}
         config={config}
         onVideoEnd={nextMedia}
+        mediaCount={mediaList.length}
       />
     </div>
   );
